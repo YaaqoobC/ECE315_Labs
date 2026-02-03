@@ -46,6 +46,7 @@
 /*************************** Enter your code here ****************************/
 // TODO: Define the seven-segment display (SSD) base address.
 #define SSD_BASE_ADDR       XPAR_GPIO_SSD_BASEADDR
+#define PSHBTN_BASE_ADDR    XPAR_XGPIO_0_BASEADDR
 
 /*****************************************************************************/
 
@@ -59,6 +60,7 @@ PmodKYPD 	KYPDInst;
 // TODO: Declare the seven-segment display peripheral here.
 static XGpio SSDInst;
 static XGpio rgbLedInst;
+static XGpio pshbtnInst;
 
 /*****************************************************************************/
 
@@ -72,12 +74,8 @@ u32 SSD_decode(u8 key_value, u8 cathode);
 int main(void)
 {
 	int status;
-    xil_printf("[LOG] STARTING\n");
-
 	// Initialize keypad
 	InitializeKeypad();
-
-    xil_printf("[LOG] KEY PAD DONE\n");
 
 /*************************** Enter your code here ****************************/
 	// TODO: Initialize SSD and set the GPIO direction to output.
@@ -95,8 +93,17 @@ int main(void)
         return XST_FAILURE;
     }
 
+    status = XGpio_Initialize(&pshbtnInst, PSHBTN_BASE_ADDR);
+    if (status != XST_SUCCESS)
+    {
+        xil_printf("GPIO Initialization for psh unsuccessful.\r\n");
+        return XST_FAILURE;
+    }
+
     XGpio_SetDataDirection(&SSDInst, 1, 0x00);
     XGpio_SetDataDirection(&rgbLedInst, 2, 0x00);
+    // THIS MAY BE WRONG
+    XGpio_SetDataDirection(&pshbtnInst, 1, 0x01);
 /*****************************************************************************/
 
 	xil_printf("Initialization Complete, System Ready!\n");
@@ -159,7 +166,6 @@ static void vKeypadTask( void *pvParameters )
 		
 /*************************** Enter your code here ****************************/
 		// TODO: display the value of `status` each time it changes
-        xil_printf("Status %u\n", status);
 
 /*****************************************************************************/
 		previous_status = status;
@@ -189,15 +195,38 @@ static void vKeypadTask( void *pvParameters )
 static void vRgbTask(void *pvParameters)
 {
     const uint8_t color = RGB_CYAN;
-	const TickType_t xPeriod = 100;
+	TickType_t xPeriod = 14;
     TickType_t xDelay = xPeriod / 2;
-	xil_printf("\nxPeriod: %d\n", xPeriod);
+
+    TickType_t xOnDelay = 7;
+    TickType_t xOffDelay = 7;
 
     while (1){
+
+        u32 val = XGpio_DiscreteRead(&pshbtnInst, 1);
+
+        vTaskDelay(xDelay);
+        
+        if (val == 8) {
+            if (!(xOnDelay < 1)) {
+                xOnDelay -= 1;
+                xOffDelay += 1;
+            }
+            xil_printf("\nOffDelay=%u, OnDelay=%u\n", xOffDelay, xOnDelay);
+            vTaskDelay(50UL);
+        } else if (val == 1) {
+            if (!(xOffDelay < 1)) {
+                xOnDelay += 1;
+                xOffDelay -= 1;
+            }
+            xil_printf("\nOffDelay=%u, OnDelay=%u\n", xOffDelay, xOnDelay);
+            vTaskDelay(50UL);
+        }
+        
         XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, color);
-        vTaskDelay(xDelay);
+        vTaskDelay(xOnDelay);
         XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, 0);
-        vTaskDelay(xDelay);
+        vTaskDelay(xOffDelay);
     }
 }
 
