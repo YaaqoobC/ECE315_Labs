@@ -68,6 +68,25 @@ static XGpio pshbtnInst;
 void InitializeKeypad();
 static void vKeypadTask( void *pvParameters );
 static void vRgbTask(void* pvParameters);
+static void vButtonsTask(void* pvParameters);
+static void vDisplayTask(void* pvParameters);
+
+// Queues
+QueueHandle_t xDisplayQueue;    // Keypad to SSD
+QueueHandle_t xRgbLedQueue;     // BTN to RGB
+
+typedef struct displayPacket {
+    u8 previous_key;
+    u8 current_key;
+};
+
+typedef struct rgbPacket {
+    TickType_t xOnDelay;
+    TickType_t xOffDelay7;
+};
+
+
+
 u32 SSD_decode(u8 key_value, u8 cathode);
 
 
@@ -121,6 +140,15 @@ int main(void)
             NULL, 						/* The task parameter is not used, so set to NULL. */
             tskIDLE_PRIORITY,			/* The task runs at the idle priority. */
             NULL);
+
+    // Queue Init:
+    xDisplayQueue = xQueueCreate(   // receive and send: u8 Keyboard Input ie. 1,2,3....A, B..
+            1, 
+            sizeof(u8));
+
+    xRgbLedQueue = xQueueCreate(
+            1, 
+            sizeof(u32));           // // receive and send: u32 button Value ie. 1, 2, 4, 8
 
 
 	vTaskStartScheduler();
@@ -228,6 +256,14 @@ static void vRgbTask(void *pvParameters)
         XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, 0);
         vTaskDelay(xOffDelay);
     }
+}
+
+static void vButtonsTask(void *pvParameters) {
+    
+}
+
+static void vDisplayTask(void *pvParameters) {
+
 }
 
 
