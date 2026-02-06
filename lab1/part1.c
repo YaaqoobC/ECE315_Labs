@@ -1,11 +1,11 @@
 /*
- * Lab 1, Part 2 - Seven-Segment Display & Keypad
+ * Lab 1, Part 1 - Seven-Segment Display & Keypad
  *
  * ECE-315 WINTER 2025 - COMPUTER INTERFACING
  * Created on: February 5, 2021
  * Modified on: July 26, 2023
  * Modified on: January 20, 2025
- * Author(s):  Shyama Gandhi, Antonio Andara Lara
+ * Author(s):  Shyama Gandhi, Antonio Andara Lara, Rowan Rasmusson, Yaaqoob Choulli
  *
  * Summary:
  * 1) Declare & initialize the 7-seg display (SSD).
