@@ -1,5 +1,5 @@
 /*
- * Lab 1, Part 2 - Seven-Segment Display & Keypad
+ * Lab 1, Part 3 - Seven-Segment Display & Keypad
  *
  * ECE-315 WINTER 2025 - COMPUTER INTERFACING
  * Created on: February 5, 2021
@@ -23,6 +23,7 @@
 // Include FreeRTOS Libraries
 #include <FreeRTOS.h>
 #include <portmacro.h>
+#include <projdefs.h>
 #include <task.h>
 #include <queue.h>
 
@@ -53,6 +54,7 @@
 // keypad key table
 #define DEFAULT_KEYTABLE 	"0FED789C456B123A"
 
+
 // Declaring the devices
 PmodKYPD 	KYPDInst;
 
@@ -72,18 +74,20 @@ static void vButtonsTask(void* pvParameters);
 static void vDisplayTask(void* pvParameters);
 
 // Queues
+TickType_t ReadTimeout = 0;
+
 QueueHandle_t xDisplayQueue;    // Keypad to SSD
 QueueHandle_t xRgbLedQueue;     // BTN to RGB
 
-typedef struct displayPacket {
+typedef struct {
     u8 previous_key;
     u8 current_key;
-};
+} displayPacket;
 
-typedef struct rgbPacket {
+typedef struct {
     TickType_t xOnDelay;
-    TickType_t xOffDelay7;
-};
+    TickType_t xOffDelay;
+} rgbPacket;
 
 
 
@@ -121,7 +125,6 @@ int main(void)
 
     XGpio_SetDataDirection(&SSDInst, 1, 0x00);
     XGpio_SetDataDirection(&rgbLedInst, 2, 0x00);
-    // THIS MAY BE WRONG
     XGpio_SetDataDirection(&pshbtnInst, 1, 0x01);
 /*****************************************************************************/
 
@@ -141,16 +144,36 @@ int main(void)
             tskIDLE_PRIORITY,			/* The task runs at the idle priority. */
             NULL);
 
+    xTaskCreate(vDisplayTask,					/* The function that implements the task. */
+            "display task", 				/* Text name for the task, provided to assist debugging only. */
+            configMINIMAL_STACK_SIZE, 	/* The stack allocated to the task. */
+            NULL, 						/* The task parameter is not used, so set to NULL. */
+            tskIDLE_PRIORITY,			/* The task runs at the idle priority. */
+            NULL);
+
+    xTaskCreate(vButtonsTask,					/* The function that implements the task. */
+            "buttons task", 				/* Text name for the task, provided to assist debugging only. */
+            configMINIMAL_STACK_SIZE, 	/* The stack allocated to the task. */
+            NULL, 						/* The task parameter is not used, so set to NULL. */
+            tskIDLE_PRIORITY,			/* The task runs at the idle priority. */
+            NULL);
+
     // Queue Init:
     xDisplayQueue = xQueueCreate(   // receive and send: u8 Keyboard Input ie. 1,2,3....A, B..
             1, 
-            sizeof(u8));
+            sizeof(displayPacket));
 
     xRgbLedQueue = xQueueCreate(
             1, 
-            sizeof(u32));           // // receive and send: u32 button Value ie. 1, 2, 4, 8
+            sizeof(rgbPacket));           // // receive and send: u32 button Value ie. 1, 2, 4, 8
 
-
+    configASSERT(xDisplayQueue);
+    configASSERT(xRgbLedQueue);
+    configASSERT(vKeypadTask);
+    configASSERT(vRgbTask);
+    configASSERT(vDisplayTask);
+    configASSERT(vButtonsTask);
+    
 	vTaskStartScheduler();
 	while(1);
 	return 0;
@@ -162,12 +185,11 @@ static void vKeypadTask( void *pvParameters )
 	u16 keystate;
 	XStatus status, previous_status = KYPD_NO_KEY;
 	u8 new_key, current_key = 'x', previous_key = 'x';
-	u32 ssd_value=0;
+    displayPacket send_buff = {current_key, previous_key};
 
 /*************************** Enter your code here ****************************/
 	// TODO: Define a constant of type TickType_t named 'xDelay' and initialize
 	//       it with a value of 100.
-    const TickType_t xDelay = pdMS_TO_TICKS(DELAY);
 
 /*****************************************************************************/
 
@@ -186,24 +208,104 @@ static void vKeypadTask( void *pvParameters )
 			// TODO: update value of previous_key and current_key
             previous_key = current_key;
             current_key = new_key;
+
+            send_buff.previous_key = previous_key;
+            send_buff.current_key = current_key;
             
+            xQueueOverwrite(xDisplayQueue, &send_buff);
+            vTaskDelay(pdMS_TO_TICKS(DELAY));
 /*****************************************************************************/
 		} else if (status == KYPD_MULTI_KEY && status != previous_status){
 			xil_printf("Error: Multiple keys pressed\r\n");
 		}
 		
-/*************************** Enter your code here ****************************/
-		// TODO: display the value of `status` each time it changes
-
-/*****************************************************************************/
 		previous_status = status;
+        vTaskDelay(pdMS_TO_TICKS(DELAY));
+	}
+}
 
-/*************************** Enter your code here ****************************/
-		/* TODO: Decode the current and previous keys using the `SSD_decode` function.
-		* Write each decoded value to the seven-segment display, one at a time,
-		* using the `XGpio_DiscreteWrite` function.
-		* Add a delay between updates for persistence of vision using `vTaskDelay`.
-		*/
+static void vRgbTask(void *pvParameters)
+{
+    const uint8_t color = RGB_CYAN;
+    rgbPacket recvd;
+    TickType_t xOnDelay = 7;
+    TickType_t xOffDelay = 7;
+
+    while (1){
+        if (xQueueReceive(xRgbLedQueue, &recvd, ReadTimeout) == pdTRUE) {
+            xOnDelay = recvd.xOnDelay;
+            xOffDelay = recvd.xOffDelay;
+        }
+        
+        if (xOnDelay != 0) {
+            XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, color);
+            vTaskDelay(xOnDelay);
+        }
+
+        XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, 0);
+        vTaskDelay(xOffDelay);
+    }
+}
+
+static void vButtonsTask(void *pvParameters) {
+	TickType_t xPeriod = 14;
+    TickType_t xDelay = xPeriod / 2;
+
+    TickType_t xOnDelay = 7;
+    TickType_t xOffDelay = 7;
+    rgbPacket packet;
+
+    while (1){
+
+        u32 val = XGpio_DiscreteRead(&pshbtnInst, 1);
+
+        vTaskDelay(xDelay);
+        int updated = 0;
+        
+        if (val == 8) {
+            if (!(xOnDelay < 1)) {
+                xOnDelay -= 1;
+                xOffDelay += 1;
+            }
+            // if (xOnDelay == 0) continue;
+            xil_printf("\nOffDelay=%u, OnDelay=%u\n", xOffDelay, xOnDelay);
+            vTaskDelay(50UL);
+            updated = 1;
+            
+
+        } else if (val == 1) {
+            if (!(xOffDelay < 1)) {
+                xOnDelay += 1;
+                xOffDelay -= 1;
+            }
+            xil_printf("\nOffDelay=%u, OnDelay=%u\n", xOffDelay, xOnDelay);
+            vTaskDelay(50UL);
+            updated = 1;
+        }
+
+        if (updated) {
+            packet.xOffDelay = xOffDelay;
+            packet.xOnDelay = xOnDelay;
+            xQueueOverwrite(xRgbLedQueue, &packet);
+            updated = 0;
+            vTaskDelay(10UL);
+        }
+        
+    }
+}
+
+static void vDisplayTask(void *pvParameters) {
+
+    displayPacket recvd_packet;
+    const TickType_t xDelay = pdMS_TO_TICKS(DELAY);
+    u32 ssd_value=0;
+    u8 current_key = 'x', previous_key = 'x';
+
+    while(1) {
+        if (xQueueReceive(xDisplayQueue, &recvd_packet, ReadTimeout) == pdTRUE) {
+            current_key = recvd_packet.current_key;
+            previous_key = recvd_packet.previous_key;
+        }
 
         ssd_value = SSD_decode(previous_key, 0);
         XGpio_DiscreteWrite(&SSDInst, 1, ssd_value);
@@ -212,58 +314,8 @@ static void vKeypadTask( void *pvParameters )
 
         ssd_value = SSD_decode(current_key, 1);
         XGpio_DiscreteWrite(&SSDInst, 1, ssd_value);
-
         vTaskDelay(xDelay);
-
-
-/*****************************************************************************/
-	}
-}
-
-static void vRgbTask(void *pvParameters)
-{
-    const uint8_t color = RGB_CYAN;
-	TickType_t xPeriod = 14;
-    TickType_t xDelay = xPeriod / 2;
-
-    TickType_t xOnDelay = 7;
-    TickType_t xOffDelay = 7;
-
-    while (1){
-
-        u32 val = XGpio_DiscreteRead(&pshbtnInst, 1);
-
-        vTaskDelay(xDelay);
-        
-        if (val == 8) {
-            if (!(xOnDelay < 1)) {
-                xOnDelay -= 1;
-                xOffDelay += 1;
-            }
-            xil_printf("\nOffDelay=%u, OnDelay=%u\n", xOffDelay, xOnDelay);
-            vTaskDelay(50UL);
-        } else if (val == 1) {
-            if (!(xOffDelay < 1)) {
-                xOnDelay += 1;
-                xOffDelay -= 1;
-            }
-            xil_printf("\nOffDelay=%u, OnDelay=%u\n", xOffDelay, xOnDelay);
-            vTaskDelay(50UL);
-        }
-        
-        XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, color);
-        vTaskDelay(xOnDelay);
-        XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, 0);
-        vTaskDelay(xOffDelay);
     }
-}
-
-static void vButtonsTask(void *pvParameters) {
-    
-}
-
-static void vDisplayTask(void *pvParameters) {
-
 }
 
 
