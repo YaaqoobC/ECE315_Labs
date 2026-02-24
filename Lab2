@@ -1,3 +1,12 @@
 Part 1:
 - Was attempting to assert if the q_tx was intialized it was not 
     - Fixed it by initializeing the queue for q_tx
+
+- URT_RX was missing delay (busy waiting)
+    - not good since it hogs cpu
+
+- Fixed UART_TX by updating the xTicksToWait from 0FFFFF to 0
+    - blocking calls are not appropriate cuz they hold the CPU
+
+- Explain why routing through the driver is important
+- LOOK AT PAGE 7
