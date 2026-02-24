@@ -80,6 +80,12 @@ static XGpio pshbtnInst;
 #define POLL_DELAY_MS     10
 #define POLL_DELAY_RX_MS  10
 
+
+// GLOBAL VARS FOR PART 2
+TickType_t xOnDelay = 7;
+TickType_t xOffDelay = 7;
+u8 current_key = 'x', previous_key = 'x';
+
 // ======================================================
 // Types
 // ======================================================
@@ -87,6 +93,8 @@ typedef enum {
   CMD_NONE,
   CMD_HASH = '1',
   CMD_VERIFY = '2',
+  CMD_LED = '3',
+  CMD_SSD = '4'
 } command_type_t;
 
 typedef struct {
@@ -356,6 +364,9 @@ static void CLI_Task(void *pvParameters)
     command_type_t op = CMD_NONE;
     crypto_request_t req;
     crypto_result_t  res;
+    char led_input;
+    char ssd_input;
+
 
     uint8_t dummy;
 
@@ -363,7 +374,7 @@ static void CLI_Task(void *pvParameters)
 
     for (;;){
         print_string("\n*******************************************\n");
-        print_string("Menu:\n1. Hash a string\n2. Verify hash of a given string\n");
+        print_string("Menu:\n1. Hash a string\n2. Verify hash of a given string\n3. Change LED Brightness\n4. Input SSD value\n");
         print_string("\nEnter your option: ");
 
         receive_byte((uint8_t *)&op);
@@ -410,6 +421,68 @@ static void CLI_Task(void *pvParameters)
 				} else {
                     print_string("\nHashes are different\n");
 				}
+                break;
+            
+            case CMD_LED:
+                while (1) {
+                    print_string("\nEnter 8 to increase brightness or 1 to dim or 0 to exit LED: ");
+                    receive_string(&led_input, 2);
+                    int updated = 0;
+                    rgbPacket packet;
+                    if (led_input == '1') {
+                        if (!(xOnDelay < 1)) {
+                            xOnDelay -= 1;
+                            xOffDelay += 1;
+                        }
+                        
+                        // if (xOnDelay == 0) continue;
+                        xil_printf("\nOffDelay=%u, OnDelay=%u\n", xOffDelay, xOnDelay);
+                        vTaskDelay(50UL);
+                        updated = 1;
+                        
+
+                    } else if (led_input == '8') {
+                        if (!(xOffDelay < 1)) {
+                            xOnDelay += 1;
+                            xOffDelay -= 1;
+                        }
+                        xil_printf("\nOffDelay=%u, OnDelay=%u\n", xOffDelay, xOnDelay);
+                        vTaskDelay(50UL);
+                        updated = 1;
+                    } else if (led_input == '0') {
+                        break;
+                    }
+
+                    if (updated) {
+                        packet.xOffDelay = xOffDelay;
+                        packet.xOnDelay = xOnDelay;
+                        xQueueOverwrite(xRgbLedQueue, &packet);
+                        updated = 0;
+                        vTaskDelay(10UL);
+                    }
+                }
+            
+                break;
+            case CMD_SSD:
+
+                while (1) {
+                    displayPacket send_buff = {current_key, previous_key};  
+                    
+                    print_string("\nEnter character to print to the SSD: ");
+                    receive_string(&ssd_input, 2);
+
+                    if (ssd_input == 'G')
+                        break;
+
+                    previous_key = current_key;
+                    current_key = ssd_input;
+
+                    send_buff.previous_key = previous_key;
+                    send_buff.current_key = current_key;
+                    
+                    xQueueOverwrite(xDisplayQueue, &send_buff);
+
+                }
                 break;
 
             default:
@@ -573,7 +646,7 @@ static void vKeypadTask( void *pvParameters )
 {
 	u16 keystate;
 	XStatus status, previous_status = KYPD_NO_KEY;
-	u8 new_key, current_key = 'x', previous_key = 'x';
+	u8 new_key = 'x';
     displayPacket send_buff = {current_key, previous_key};
 
 /*************************** Enter your code here ****************************/
@@ -639,12 +712,9 @@ static void vRgbTask(void *pvParameters)
 static void vButtonsTask(void *pvParameters) {
 	TickType_t xPeriod = 14;
     TickType_t xDelay = xPeriod / 2;
-
-    TickType_t xOnDelay = 7;
-    TickType_t xOffDelay = 7;
     rgbPacket packet;
 
-    while (1){
+    while (1) {
 
         u32 val = XGpio_DiscreteRead(&pshbtnInst, 1);
 
