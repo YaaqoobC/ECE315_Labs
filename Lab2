@@ -1,2 +1,3 @@
 Part 1:
-- Fixed it by initializeing the queue for q_tx
+- Was attempting to assert if the q_tx was intialized it was not 
+    - Fixed it by initializeing the queue for q_tx
