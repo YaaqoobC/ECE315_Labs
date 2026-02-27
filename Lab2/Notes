@@ -14,3 +14,36 @@ Part 1:
 
 Part 3:
 - the FIFIO is internal to the UART
+
+Components:
+- FIFO: internal to the UART
+- TX_queue: recives byte from 'sendByte()' and sends them to the ISR
+- RX_queue: recives bytes from ISR and sends them to 'recvByte()'
+
+Usage:
+    1. Send one byte directly to UART from sendByte() when the FIFO is empty
+        -> Signifies that we are ready to send a bunch of bytes ie. string
+    2. Send an interpt via a bitmask change
+    3. Rest of the bytes get sent
+
+Test Cases:
+    - Typing 'y', 'e', 's' in moderate sucession
+        
+
+
+Why is it that when we have a lot of I/P:
+
+When you paste a big string, you overflow the single byte send directly to UART, so the rest of the chars go the the xTxQueue to be sent.
+This is why the Tx interrupts and Rx interrupts are vastly different because the Rx interruts get triggered for each byte recv'd.
+But the Tx interrupts are 
+
+
+check if empty
+load the byte
+enable the interrupt
+loead everything in the queue
+
+
+**REASON TO SEND 1B ON FIFO FIRST THEN HAVE TRANSMIT INTERUPT THEN SEND THE REMINDER OF BYTES FROM QUEUE TO FIFO**
+- when the TX interrupt is triggered, the ISR takes bytes from the xTxQueue and puts them on the FIFO to be sent.
+- this would not happen if we did not send a singele byte directly over to the FIFO first.
