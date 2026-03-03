@@ -62,7 +62,6 @@ void handleReceiveEvent()
     u8 receive_buffer;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-
     while (XUartPs_IsReceiveData(UART_BASEADDR)){
         receive_buffer = XUartPs_ReadReg(UART_BASEADDR, UART_FIFO_OFFSET);
 
@@ -81,10 +80,13 @@ void handleSentEvent()
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     u8 txByte;
 
-
     // Fill FIFO while not full and queue has data
-    while (!(XUartPs_ReadReg(UART.Config.BaseAddress, XUARTPS_SR_OFFSET) & XUARTPS_SR_TXFULL)){
-        if (xQueueReceiveFromISR(xTxQueue, &txByte, &xHigherPriorityTaskWoken) == pdPASS){
+    while (!(XUartPs_ReadReg(UART.Config.BaseAddress, XUARTPS_SR_OFFSET) & XUARTPS_SR_TXFULL)) {
+        //While there is space:
+            // Check if we recive from the ISR
+            // Yes -> write to the FIFO
+            // No  -> say FIFO is empy and increment the TX count 
+        if (xQueueReceiveFromISR(xTxQueue, &txByte, &xHigherPriorityTaskWoken) == pdPASS) {
             XUartPs_WriteReg(UART.Config.BaseAddress, XUARTPS_FIFO_OFFSET, txByte);
         } else {
             // No more data → disable TXEMPTY interrupt
@@ -136,13 +138,14 @@ void mySendByte(u8 data)
         // Go through the queue
 
     taskENTER_CRITICAL();
-    if (XUartPs_IsTransmitFifoEmpty(UART_BASEADDR)) {
+	// Checking the FIFO MAY cause an unwanted TX interrupt
+    if (uxQueueMessagesWaiting(xTxQueue) == 0) {
         XUartPs_WriteReg(UART_BASEADDR, UART_FIFO_OFFSET, data);
         // Enaable interrupt to transmit via ISR
         enableTxEmpty();
     } else {
-        // while (myTransmitFull()) {}
         xQueueSend(xTxQueue, &data, 0);
+        enableTxEmpty();
     }
     taskEXIT_CRITICAL();
     return;
@@ -229,5 +232,3 @@ int setupInterruptSystem(INTC *IntcInstancePtr, XUartPs *UartInstancePtr, u16 Ua
 
     return XST_SUCCESS;
 }
-
-
