@@ -131,8 +131,8 @@ BaseType_t myTransmitFull(void)
 
 void mySendByte(u8 data)
 {
-    // Fifi empty
-        // UART (Since sending only one byte)
+    // Queue empty
+        // Send direct to UART (Since sending only one byte)
 
     // Else:
         // Go through the queue
