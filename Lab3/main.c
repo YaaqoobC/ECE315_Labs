@@ -290,8 +290,8 @@ static void gameTask( void *pvParameters )
     int ball_dx = -5, ball_dy = 5; 
     int score = 0;
     int lives = 3;
-    int base_speed_x = 5; 
-    int base_speed_y = 5; 
+    int base_speed_x = 3; 
+    int base_speed_y = 3; 
     
     Difficulty new_diff;
     int paddle_move;
