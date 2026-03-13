@@ -36,6 +36,7 @@
 
 // SSD Definitions
 #define SSD_BASE_ADDR    XPAR_GPIO_SSD_BASEADDR
+#define ASCII_OFFSET 48
 
 // keypad key table
 #define DEFAULT_KEYTABLE "0FED789C456B123A"
@@ -181,7 +182,7 @@ static void ssdTask( void *pvParameters )
         vTaskDelay(xDelay);
 
         // --- Write Right Digit (Lives) ---
-        ssd_value = SSD_decode(local_lives + 48, 0); 
+        ssd_value = SSD_decode(local_lives + ASCII_OFFSET, 0); 
         XGpio_DiscreteWrite(&ssdInst, 1, ssd_value);
         vTaskDelay(xDelay);
     }
@@ -279,7 +280,7 @@ static void gameTask( void *pvParameters )
 {
     char temp[20];
     OLED_SetDrawMode(&oledDevice, 0);
-    OLED_SetCharUpdate(&oledDevice, 0); 
+    OLED_SetCharUpdate(&oledDevice, 0);
 
     const TickType_t frameDelay = 50 / portTICK_RATE_MS;
 
@@ -318,17 +319,28 @@ static void gameTask( void *pvParameters )
 
         // 2. Check for Difficulty Update
         if (xQueueReceive(q_difficulty_game, &new_diff, 0) == pdTRUE) {
-            if (new_diff == EASY)   { base_speed_x = 5; base_speed_y = 5; }
-            if (new_diff == MEDIUM) { base_speed_x = 7; base_speed_y = 7; }
-            if (new_diff == HARD)   { base_speed_x = 10; base_speed_y = 10; }
+            if (new_diff == EASY) { 
+                base_speed_x = 3; 
+                base_speed_y = 3; 
+            }
+            if (new_diff == MEDIUM) {
+                base_speed_x = 7; 
+                base_speed_y = 7;
+            }
+            if (new_diff == HARD) {
+                base_speed_x = 10;
+                base_speed_y = 10;
+            }
         }
 
         // 3. Process all incoming Paddle Movements
         while (xQueueReceive(q_paddle, &paddle_move, 0) == pdTRUE) {
             paddle_y += paddle_move;
             // Clamp paddle bounds
-            if (paddle_y < 0) paddle_y = 0;
-            if (paddle_y > OledRowMax - paddle_height) paddle_y = OledRowMax - paddle_height;
+            if (paddle_y < 0) 
+                paddle_y = 0;
+            if (paddle_y > OledRowMax - paddle_height) 
+                paddle_y = OledRowMax - paddle_height;
         }
 
         // --- Physics Engine ---
