@@ -26,7 +26,7 @@
 #define KYPD_BASE_ADDR   XPAR_GPIO_KEYPAD_BASEADDR
 #define BTN_CHANNEL      1
 
-// RGB LED Definitions (from lab reference)
+// RGB LED Definitions
 #define RGB_LED_ADDR     XPAR_GPIO_LEDS_BASEADDR
 #define RGB_CHANNEL      2
 #define LED_RED          0x4
@@ -34,21 +34,27 @@
 #define LED_BLUE         0x1
 #define LED_OFF          0x0
 
+// SSD Definitions (Merged from Lab 2)
+#define SSD_BASE_ADDR    XPAR_GPIO_SSD_BASEADDR
+
 // keypad key table
 #define DEFAULT_KEYTABLE "0FED789C456B123A"
 
 // Declaring the devices
 XGpio btnInst;
-XGpio rgbLedInst; // New: RGB LED instance
+XGpio rgbLedInst;
+XGpio ssdInst;       // New: SSD instance
 PmodOLED oledDevice;
 PmodKYPD KYPDInst;
 
 // Function prototypes
 void InitializeKeypad();
+u32 SSD_decode(u8 key_value, u8 cathode); // New: SSD decoder
 static void keypadTask( void *pvParameters );
 static void gameTask( void *pvParameters );
 static void buttonTask( void *pvParameters );
-static void rgbTask( void *pvParameters ); // New: RGB monitoring task
+static void rgbTask( void *pvParameters ); 
+static void ssdTask( void *pvParameters ); // New: SSD multiplexing task
 
 // Display configurations
 const u8 orientation = 0x0; 
@@ -59,19 +65,20 @@ typedef enum { EASY, MEDIUM, HARD } Difficulty;
 volatile Difficulty current_difficulty = EASY;
 
 // Speeds mapping to difficulty
-volatile int base_speed_x = 1; // Easy default
-volatile int base_speed_y = 1; // Easy default
+volatile int base_speed_x = 1; 
+volatile int base_speed_y = 1; 
 
 // Paddle definitions
-int paddle_y = 12;            // Starting Y position of paddle
-const int paddle_x = 5;       // Fixed X position of paddle
-const int paddle_height = 8;  // Height of paddle
+int paddle_y = 12;            
+const int paddle_x = 5;       
+const int paddle_height = 8;  
 
 // Ball definitions
 int ball_x = 100, ball_y = 16; 
-int ball_dx = -1, ball_dy = 1; // Start moving left and down
+int ball_dx = -1, ball_dy = 1; 
 const int ball_size = 2;       
 
+// Global Game Trackers
 int score = 0;
 int lives = 3;
 
@@ -102,8 +109,15 @@ int main()
 		xil_printf("RGB Initialization failed.\r\n");
 		return XST_FAILURE;
 	}
-    // Set RGB channel as output
     XGpio_SetDataDirection(&rgbLedInst, RGB_CHANNEL, 0x0);
+
+    // 5. Initialize SSD (Merged from Lab 2)
+    status = XGpio_Initialize(&ssdInst, SSD_BASE_ADDR);
+    if (status != XST_SUCCESS) {
+        xil_printf("GPIO Initialization for SSD unsuccessful.\r\n");
+        return XST_FAILURE;
+    }
+    XGpio_SetDataDirection(&ssdInst, 1, 0x00); // Set as output
 
 	xil_printf("Initialization Complete, System Ready!\n");
     xil_printf("Controls: 2 (Up), 8 (Down)\n");
@@ -116,6 +130,7 @@ int main()
 	xTaskCreate(gameTask,   "game task",   configMINIMAL_STACK_SIZE, NULL, 2, NULL);
 	xTaskCreate(buttonTask, "button task", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     xTaskCreate(rgbTask,    "rgb task",    configMINIMAL_STACK_SIZE, NULL, 2, NULL);
+    xTaskCreate(ssdTask,    "ssd task",    configMINIMAL_STACK_SIZE, NULL, 2, NULL); // Launch SSD Task
 
     // Start Scheduler
 	vTaskStartScheduler();
@@ -128,6 +143,64 @@ void InitializeKeypad()
 {
    KYPD_begin(&KYPDInst, KYPD_BASE_ADDR);
    KYPD_loadKeyTable(&KYPDInst, (u8*) DEFAULT_KEYTABLE);
+}
+
+// -------------------------------------------------------------------------
+// SSD TASK: Handles multiplexing the 7-segment display for 'lives'
+// -------------------------------------------------------------------------
+static void ssdTask( void *pvParameters )
+{
+    // 10ms delay is standard for multiplexing so the eye doesn't see the flicker
+    const TickType_t xDelay = pdMS_TO_TICKS(10); 
+    u32 ssd_value = 0;
+
+    while(1) {
+        // --- Write Left Digit (Blank) ---
+        // Passing 0 (which defaults to 0b00000000 in the decoder) keeps it off
+        ssd_value = SSD_decode(0, 1); 
+        XGpio_DiscreteWrite(&ssdInst, 1, ssd_value);
+        vTaskDelay(xDelay);
+
+        // --- Write Right Digit (Lives) ---
+        // We add 48 to 'lives' because your decoder expects ASCII values (48 = '0')
+        ssd_value = SSD_decode(lives + 48, 0); 
+        XGpio_DiscreteWrite(&ssdInst, 1, ssd_value);
+        vTaskDelay(xDelay);
+    }
+}
+
+// -------------------------------------------------------------------------
+// SSD DECODE: Translates ASCII to 7-segment binary (From Lab 2)
+// -------------------------------------------------------------------------
+u32 SSD_decode(u8 key_value, u8 cathode)
+{
+    u32 result;
+
+    switch(key_value){ 
+        case 48: result = 0b00111111; break; // 0
+        case 49: result = 0b00110000; break; // 1
+        case 50: result = 0b01011011; break; // 2
+        case 51: result = 0b01111001; break; // 3
+        case 52: result = 0b01110100; break; // 4
+        case 53: result = 0b01101101; break; // 5
+        case 54: result = 0b01101111; break; // 6
+        case 55: result = 0b00111000; break; // 7
+        case 56: result = 0b01111111; break; // 8
+        case 57: result = 0b01111100; break; // 9
+        case 65: result = 0b01111110; break; // A
+        case 66: result = 0b01100111; break; // B
+        case 67: result = 0b00001111; break; // C
+        case 68: result = 0b01110011; break; // D
+        case 69: result = 0b01001111; break; // E
+        case 70: result = 0b01001110; break; // F
+        default: result = 0b00000000; break; // Blank
+    }
+
+    if(cathode==0){
+        return result;
+    } else {
+        return result | 0b10000000; // Set MSB to 1 for left digit
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -162,7 +235,7 @@ static void keypadTask( void *pvParameters )
           else if (new_key == '5') {
               current_difficulty = MEDIUM;
               base_speed_x = 2;
-              base_speed_y = 1; // Keep Y a bit slower to make it playable
+              base_speed_y = 1; 
           }
           else if (new_key == '6') {
               current_difficulty = HARD;
@@ -189,62 +262,55 @@ static void gameTask( void *pvParameters )
 	while(1) {
 		if (lives > 0) {
             
-            // Apply current difficulty speeds dynamically while preserving direction
             ball_dx = (ball_dx > 0) ? base_speed_x : -base_speed_x;
             ball_dy = (ball_dy > 0) ? base_speed_y : -base_speed_y;
 
-            // --- 1. Update Ball Position ---
+            // Update Ball Position
             ball_x += ball_dx;
             ball_y += ball_dy;
 
-            // --- 2. Roof and Floor Collisions ---
+            // Roof and Floor Collisions
             if (ball_y <= 0) {
                 ball_y = 0;             
-                ball_dy = -ball_dy;     // Reverse Y 
+                ball_dy = -ball_dy;     
             } else if (ball_y >= (OledRowMax - ball_size)) {
                 ball_y = OledRowMax - ball_size; 
-                ball_dy = -ball_dy;     // Reverse Y 
+                ball_dy = -ball_dy;     
             }
 
-            // --- 3. Right Wall Collision ---
+            // Right Wall Collision
             if (ball_x >= (OledColMax - ball_size)) {
                 ball_x = OledColMax - ball_size;
-                ball_dx = -ball_dx;     // Reverse X
+                ball_dx = -ball_dx;     
             }
 
-            // --- 4. Paddle & Left Wall Collision ---
+            // Paddle & Left Wall Collision
             if (ball_x <= paddle_x + 1) { 
-                // Hit the paddle?
                 if ((ball_y + ball_size >= paddle_y) && (ball_y <= paddle_y + paddle_height)) {
-                    ball_x = paddle_x + 2;   // Push ball slightly right
-                    ball_dx = -ball_dx;      // Bounce back
+                    ball_x = paddle_x + 2;   
+                    ball_dx = -ball_dx;      
                     score++;                 
-                } 
-                // Missed paddle
-                else if (ball_x <= 0) {
+                } else if (ball_x <= 0) {
                     lives--;                 
-                    // Reset Ball
                     ball_x = OledColMax - 10;
                     ball_y = rand() % (OledRowMax - ball_size);
-                    ball_dx = -base_speed_x; // Serve towards player
+                    ball_dx = -base_speed_x; 
                 }
             }
 
-            // --- 5. Draw Frame ---
+            // Draw Frame
             OLED_ClearBuffer(&oledDevice);
 
-            // Draw Paddle
             OLED_MoveTo(&oledDevice, paddle_x, paddle_y);
             OLED_DrawLineTo(&oledDevice, paddle_x, paddle_y + paddle_height);
 
-            // Draw Ball 
             OLED_MoveTo(&oledDevice, ball_x, ball_y);
             OLED_RectangleTo(&oledDevice, ball_x + (ball_size - 1), ball_y + (ball_size - 1));
 
             OLED_Update(&oledDevice);
 
 		} else {
-            // --- Game Over Screen ---
+            // Game Over Screen
 			OLED_ClearBuffer(&oledDevice);
 			
             OLED_SetCursor(&oledDevice, 0, 0);
@@ -269,7 +335,6 @@ static void rgbTask( void *pvParameters )
     u32 led_value = LED_OFF;
 
     while (1) {
-        // Map current difficulty state to colors
         if (current_difficulty == EASY) {
             led_value = LED_GREEN;
         } else if (current_difficulty == MEDIUM) {
@@ -278,10 +343,7 @@ static void rgbTask( void *pvParameters )
             led_value = LED_RED;
         }
 
-        // Write to GPIO
         XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, led_value);
-        
-        // Only needs to check periodically
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
@@ -297,12 +359,10 @@ static void buttonTask( void *pvParameters )
 	while(1) {
 		buttonVal = XGpio_DiscreteRead(&btnInst, BTN_CHANNEL);
 		
-        // If any button is pressed while game is over, restart.
         if (buttonVal != 0 && lives == 0) {
 			lives = 3;
 			score = 0;
             
-            // Reset paddle and ball
             paddle_y = 12;
             ball_x = OledColMax - 10;
             ball_y = rand() % (OledRowMax - ball_size);
