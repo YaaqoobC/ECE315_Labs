@@ -20,10 +20,14 @@
 #include "PmodOLED.h"
 #include "OLEDControllerCustom.h"
 
+
 #define BTN_DEVICE_ID  XPAR_GPIO_INPUTS_BASEADDR
 #define KYPD_DEVICE_ID XPAR_GPIO_KEYPAD_BASEADDR
 #define KYPD_BASE_ADDR XPAR_GPIO_KEYPAD_BASEADDR
 #define BTN_CHANNEL    1
+
+
+#define FRAME_DELAY 50000
 
 // keypad key table
 #define DEFAULT_KEYTABLE 	"0FED789C456B123A"
@@ -31,70 +35,91 @@
 // Declaring the devices
 XGpio btnInst;
 PmodOLED oledDevice;
-PmodKYPD KYPDInst;
+PmodKYPD 	KYPDInst;
 
 // Function prototypes
 void InitializeKeypad();
+void initializeScreen();
 static void keypadTask( void *pvParameters );
-static void gameTask( void *pvParameters );
+static void oledTask( void *pvParameters );
 static void buttonTask( void *pvParameters );
+int grphClampXco(int xco);
+int grphClampYco(int yco);
+int grphAbs(int foo);
+void OLED_DrawLineTo(PmodOLED *InstancePtr, int xco, int yco);
+void OLED_getPos(PmodOLED *InstancePtr, int *pxco, int *pyco);
+void drawTarget(u8 targetX, u8 targetY, u8 width, u8 length);
 
-// Display configurations
-const u8 orientation = 0x0; 
-const u8 invert = 0x1;      
 
-// --- Pong Game Variables ---
-// Paddle definitions
-int paddle_y = 12;            // Starting Y position of paddle (middle of screen)
-const int paddle_x = 5;       // Fixed X position of paddle (left side)
-const int paddle_height = 8;  // How tall the paddle is
 
-// Ball definitions
-int ball_x = 100, ball_y = 16; // Ball starting position
-int ball_dx = -2, ball_dy = 1; // Ball velocity (moving left and slightly down)
-const int ball_size = 2;       // Make it a 2x2 square so it's easier to see
-
-// Game State
-int score = 0;
-int lives = 3;
+const u8 orientation = 0x0; // Set up for Normal PmodOLED(false) vs normal
+                            // Onboard OLED(true)
+const u8 invert = 0x1; // true = whitebackground/black letters
+                       // false = black background /white letters
+u8 keypad_val = 'x';
+u8 size = 8, origin = 0;
+u8 aimx=0, aimy=0;
+u8 targetx=30, targety=5;
+u8 targetWidth=8, targetLength=15;
+int score = 0, lives = 3;
 
 int main()
 {
 	int status = 0;
-    
-	// Initialize Keypad
+	// Initialize Devices
 	InitializeKeypad();
 
-	// Initialize OLED
+	 // orientation: 0 is usually normal, invert: 0 = normal colors
     OLED_Begin(&oledDevice,
                XPAR_GPIO_OLED_BASEADDR,
                XPAR_SPI_OLED_BASEADDR,
                orientation,
                invert);
 
-	// Initialize Buttons
+	// Buttons
 	status = XGpio_Initialize(&btnInst, BTN_DEVICE_ID);
 	if(status != XST_SUCCESS){
-		xil_printf("GPIO Initialization failed.\r\n");
+		xil_printf("GPIO Initialization for SSD failed.\r\n");
 		return XST_FAILURE;
 	}
 
+
 	xil_printf("Initialization Complete, System Ready!\n");
 
-    // Seed random number generator for ball spawning
-    srand(12345);
 
-    // Create Tasks
-	xTaskCreate(keypadTask, "keypad task", configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY, NULL);
-	xTaskCreate(gameTask, "game task", configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY, NULL);
-	xTaskCreate(buttonTask, "button task", configMINIMAL_STACK_SIZE, NULL, tskIDLE_PRIORITY, NULL);
+	xTaskCreate( keypadTask					/* The function that implements the task. */
+			   , "keypad task"				/* Text name for the task, provided to assist debugging only. */
+			   , configMINIMAL_STACK_SIZE	/* The stack allocated to the task. */
+			   , NULL						/* The task parameter is not used, so set to NULL. */
+			   , tskIDLE_PRIORITY			/* The task runs at the idle priority. */
+			   , NULL
+			   );
 
-    // Start Scheduler
+
+	xTaskCreate( oledTask					/* The function that implements the task. */
+			   , "screen task"				/* Text name for the task, provided to assist debugging only. */
+			   , configMINIMAL_STACK_SIZE	/* The stack allocated to the task. */
+			   , NULL						/* The task parameter is not used, so set to NULL. */
+			   , tskIDLE_PRIORITY			/* The task runs at the idle priority. */
+			   , NULL
+			   );
+
+	xTaskCreate( buttonTask
+			   , "button task"
+			   , configMINIMAL_STACK_SIZE
+			   , NULL
+			   , tskIDLE_PRIORITY
+			   , NULL
+			   );
+
 	vTaskStartScheduler();
 
-    while(1);
-    return 0;
+
+   while(1);
+
+   return 0;
 }
+
 
 void InitializeKeypad()
 {
@@ -102,152 +127,177 @@ void InitializeKeypad()
    KYPD_loadKeyTable(&KYPDInst, (u8*) DEFAULT_KEYTABLE);
 }
 
-// -------------------------------------------------------------------------
-// KEYPAD TASK: Handles moving the paddle up and down
-// -------------------------------------------------------------------------
+
 static void keypadTask( void *pvParameters )
 {
    u16 keystate;
+   u8 flag = 0;
    XStatus status, last_status = KYPD_NO_KEY;
    u8 new_key = 'x';
 
-   // Poll keypad every 25ms
    const TickType_t xDelay = 25 / portTICK_RATE_MS;
 
+   xil_printf("Pmod KYPD app started. Press any key on the Keypad.\r\n");
    while (1) {
+	  // Capture state of the keypad
 	  keystate = KYPD_getKeyStates(&KYPDInst);
+
+	  // Determine which single key is pressed, if any
+	  // if a key is pressed, store the value of the new key in new_key
 	  status = KYPD_getKeyPressed(&KYPDInst, keystate, &new_key);
 
-      // We only care about continuous presses to smoothly move the paddle
-	  if (status == KYPD_SINGLE_KEY) {
-          if (new_key == '2') {
-              // Move paddle UP, clamp to the top edge (Y = 0)
-              if (paddle_y > 0) paddle_y -= 2; 
-          } 
-          else if (new_key == '8') {
-              // Move paddle DOWN, clamp to the bottom edge
-              if (paddle_y < (OledRowMax - paddle_height)) paddle_y += 2;
-          }
+	  // Print key detect if a new key is pressed or if status has changed
+	  if (status == KYPD_SINGLE_KEY){
+	  } else if (status == KYPD_MULTI_KEY && status != last_status){
+		 xil_printf("Error: Multiple keys pressed\r\n");
+	  } else if (status == KYPD_NO_KEY && last_status == KYPD_NO_KEY ){
+		  new_key = '0';
 	  }
 
 	  last_status = status;
-	  vTaskDelay(xDelay);
+	  keypad_val = new_key;
+	  if (keypad_val == '4'){
+		  flag = !flag;
+		  if(aimy > 0 && flag) {
+			  aimy-=1;
+		  }
+		  if(origin > 0 && flag){
+			  origin--;
+		  }
+	  } else if (keypad_val == '6'){
+		  flag = !flag;
+		  if(aimy < (OledRowMax - size - 1) && flag) {
+			  aimy+=1;
+		  }
+		  if(origin < (OledRowMax - size - 1) && flag) {
+			  origin++;
+		  }
+	  } else if (keypad_val == '2'){
+		  flag = !flag;
+		  if(aimx < (OledColMax - 1) && flag) {
+			  aimx+=1;
+		  }
+	  } else if (keypad_val == '5'){
+		  flag = !flag;
+	  } else if (keypad_val == '8'){
+		  flag = !flag;
+		  if(aimx > 0 && flag) {
+			  aimx-=1;
+		  }
+	  }
+	  vTaskDelay(xDelay); // Scanning Delay
    }
 }
 
-// -------------------------------------------------------------------------
-// GAME TASK: Handles physics, collision, and drawing to the OLED
-// -------------------------------------------------------------------------
-static void gameTask( void *pvParameters )
+
+void drawCrossHair(u8 xco, u8 yco)
 {
-	char temp[20];
-	xil_printf("Starting Pong Game Loop\n");
-    
-	OLED_SetDrawMode(&oledDevice, 0);
-	OLED_SetCharUpdate(&oledDevice, 0); // Turn auto-updating off for smooth frames
+	OLED_MoveTo(&oledDevice, xco, 0);
+	OLED_DrawLineTo(&oledDevice, xco, OledRowMax - 1);
+	OLED_MoveTo(&oledDevice, 0, yco);
+	OLED_DrawLineTo(&oledDevice, OledColMax - 1, yco);
+}
 
-    // ~20 frames per second
-    const TickType_t frameDelay = 50 / portTICK_RATE_MS;
 
-	while(1) {
-		if (lives > 0) {
-            
-            // --- 1. Update Ball Position ---
-            ball_x += ball_dx;
-            ball_y += ball_dy;
+void drawTarget(u8 targetx, u8 targety, u8 width, u8 length)
+{
+	if (targetx > OledColMax - 1){
+		targetx = 0;
+	}
+	if (targety > OledRowMax - 1){
+		targety = 0;
+	}
+	if (targetx + length > OledColMax - 1){
+		targetLength = OledColMax - 1;
+	}
+	if (targety + width > OledRowMax - 1){
+		targetWidth = OledRowMax - 1;
+	}
+	OLED_MoveTo(&oledDevice, targetx, targety);
+	OLED_RectangleTo(&oledDevice, targetx + length, targety + width);
+}
 
-            // --- 2. Roof and Floor Collisions ---
-            if (ball_y <= 0) {
-                ball_y = 0;              // Push out of bounds
-                ball_dy = -ball_dy;      // Reverse Y direction
-            } else if (ball_y >= (OledRowMax - ball_size)) {
-                ball_y = OledRowMax - ball_size; 
-                ball_dy = -ball_dy;      // Reverse Y direction
-            }
 
-            // --- 3. Right Wall Collision (Bounce back to player) ---
-            if (ball_x >= (OledColMax - ball_size)) {
-                ball_x = OledColMax - ball_size;
-                ball_dx = -ball_dx;      // Reverse X direction
-            }
-
-            // --- 4. Paddle & Left Wall Collision ---
-            if (ball_x <= paddle_x + 1) { 
-                
-                // Did it hit the paddle? (Check Y bounds)
-                if ((ball_y + ball_size >= paddle_y) && (ball_y <= paddle_y + paddle_height)) {
-                    ball_x = paddle_x + 2;   // Push ball slightly right of paddle
-                    ball_dx = -ball_dx;      // Bounce back!
-                    score++;                 // Increment score
-                } 
-                // Did it miss the paddle and hit the left wall?
-                else if (ball_x <= 0) {
-                    lives--;                 // Lose a life
-                    
-                    // Reset Ball
-                    ball_x = OledColMax - 10;
-                    ball_y = rand() % (OledRowMax - ball_size);
-                    ball_dx = -2;            // Send back towards the player
-                }
-            }
-
-            // --- 5. Draw Frame ---
-            OLED_ClearBuffer(&oledDevice);
-
-            // Draw Paddle
-            OLED_MoveTo(&oledDevice, paddle_x, paddle_y);
-            OLED_DrawLineTo(&oledDevice, paddle_x, paddle_y + paddle_height);
-
-            // Draw Ball (as a small rectangle/pixel cluster)
-            OLED_MoveTo(&oledDevice, ball_x, ball_y);
-            OLED_RectangleTo(&oledDevice, ball_x + (ball_size - 1), ball_y + (ball_size - 1));
-
-            OLED_Update(&oledDevice);
-
-		} else {
-            // --- Game Over Screen ---
-			OLED_ClearBuffer(&oledDevice);
-			
-            OLED_SetCursor(&oledDevice, 0, 0);
-			OLED_PutString(&oledDevice, "Game Over");
-			
-            OLED_SetCursor(&oledDevice, 0, 2);
-			sprintf(temp, "Score: %d", score);
-			OLED_PutString(&oledDevice, temp);
-			
-            OLED_Update(&oledDevice);
-		}
-
-        // Wait for next frame
-        vTaskDelay(frameDelay);
+void checkShot(void)
+{
+	if (aimx >= targetx && aimx < (targetx + targetLength) && aimy >= targety && aimy < (targety + targetWidth) ){
+		score++;
+		xil_printf("hit!, score: %d\n", score);
+		OLED_ClearBuffer(&oledDevice);
+		targetx = rand() % OledColMax;
+		targety = rand() % OledRowMax;
+		targetLength = rand() % 20;
+		targetWidth = rand() % 10;
+	} else {
+		lives--;
+		xil_printf("missed, lives: %d\n", lives);
 	}
 }
 
-// -------------------------------------------------------------------------
-// BUTTON TASK: Handles resetting the game when lives run out
-// -------------------------------------------------------------------------
+
+static void oledTask( void *pvParameters )
+{
+	u8 buttonVal = 0;
+	char temp[10];
+	xil_printf("UART and SPI opened for PmodOLED Demo\n");
+	OLED_SetDrawMode(&oledDevice, 0);
+	// Turn automatic updating off
+	OLED_SetCharUpdate(&oledDevice, 0);
+
+	while(1){
+		buttonVal = XGpio_DiscreteRead(&btnInst, BTN_CHANNEL);
+		if (lives == 0){
+			score = 0;
+			aimx = 0;
+			aimy = 0;
+			OLED_ClearBuffer(&oledDevice);
+			OLED_SetCursor(&oledDevice, 0, 1);
+			OLED_PutString(&oledDevice, "Game Over");
+			OLED_Update(&oledDevice);
+		} else {
+			if (buttonVal == 0){
+				drawCrossHair(aimx, aimy);
+				drawTarget(targetx, targety, targetWidth, targetLength);
+				OLED_Update(&oledDevice);
+				usleep(FRAME_DELAY);
+				OLED_ClearBuffer(&oledDevice);
+			} else if (buttonVal == 2){
+				OLED_ClearBuffer(&oledDevice);
+				OLED_SetCursor(&oledDevice, 0, 0);
+				sprintf(temp, "score: %d", score);
+				OLED_PutString(&oledDevice, temp);
+				OLED_SetCursor(&oledDevice, 0, 2);
+				sprintf(temp, "lives: %d", lives);
+				OLED_PutString(&oledDevice, temp);
+				OLED_Update(&oledDevice);
+			} else if (buttonVal == 4){
+				OLED_ClearBuffer(&oledDevice);
+				OLED_SetCursor(&oledDevice, 0, 1);
+				u32 ticks = xTaskGetTickCount();
+				ticks = ticks / 100;
+				sprintf(temp, "time: %lu", ticks);
+				OLED_PutString(&oledDevice, temp);
+				OLED_Update(&oledDevice);
+			}
+		}
+	}
+}
+
+
 static void buttonTask( void *pvParameters )
 {
 	u8 buttonVal = 0;
-    const TickType_t pollDelay = 100 / portTICK_RATE_MS;
-
-	while(1) {
+	while(1){
 		buttonVal = XGpio_DiscreteRead(&btnInst, BTN_CHANNEL);
-		
-        // If button is pressed while the game is over, restart.
-        if (buttonVal != 0 && lives == 0) {
-			xil_printf("Resetting game...\n");
+		if (buttonVal == 1 && lives > 0){
+			checkShot();
+		} else if (buttonVal == 1 && lives == 0){
+			xil_printf("game over, reset with BTN3\n");
+		} else if (buttonVal == 8){
+			xil_printf("reset\n");
 			lives = 3;
 			score = 0;
-            
-            // Reset paddle and ball
-            paddle_y = 12;
-            ball_x = OledColMax - 10;
-            ball_y = rand() % (OledRowMax - ball_size);
-            ball_dx = -2;
-            ball_dy = 1;
 		}
-
-		vTaskDelay(pollDelay);
+		vTaskDelay(10);
 	}
 }
