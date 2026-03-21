@@ -68,17 +68,6 @@ static void ssdTask( void *pvParameters );
 const u8 orientation = 0x1; 
 const u8 invert = 0x1;      
 
-// --- GAME STATE GLOBALS COMMENTED OUT ---
-// typedef enum { EASY, MEDIUM, HARD } Difficulty;
-// volatile Difficulty current_difficulty = EASY;
-// volatile int base_speed_x = 5; 
-// volatile int base_speed_y = 5; 
-// int paddle_y = 12;            
-// int ball_x = 100, ball_y = 16; 
-// int ball_dx = -1, ball_dy = 1; 
-// int score = 0;
-// int lives = 3;
-
 // Global Constants (These are safe to keep global as they never change)
 typedef enum { EASY, MEDIUM, HARD } Difficulty;
 const int paddle_x = 5;       
@@ -88,25 +77,21 @@ const int ball_size = 2;
 int main()
 {
     int status = 0;
-    
-    // 1. Initialize Keypad
+
     InitializeKeypad();
 
-    // 2. Initialize OLED
     OLED_Begin(&oledDevice,
                XPAR_GPIO_OLED_BASEADDR,
                XPAR_SPI_OLED_BASEADDR,
                orientation,
                invert);
 
-    // 3. Initialize Buttons
     status = XGpio_Initialize(&btnInst, BTN_DEVICE_ID);
     if(status != XST_SUCCESS){
         xil_printf("GPIO Initialization failed.\r\n");
         return XST_FAILURE;
     }
 
-    // 4. Initialize RGB LEDs
     status = XGpio_Initialize(&rgbLedInst, RGB_LED_ADDR);
     if(status != XST_SUCCESS){
         xil_printf("RGB Initialization failed.\r\n");
@@ -114,7 +99,6 @@ int main()
     }
     XGpio_SetDataDirection(&rgbLedInst, RGB_CHANNEL, 0x0);
 
-    // 5. Initialize SSD
     status = XGpio_Initialize(&ssdInst, SSD_BASE_ADDR);
     if (status != XST_SUCCESS) {
         xil_printf("GPIO Initialization for SSD unsuccessful.\r\n");
@@ -122,7 +106,6 @@ int main()
     }
     XGpio_SetDataDirection(&ssdInst, 1, 0x00); // Set as output
 
-    // 6. Initialize Queues
     q_paddle = xQueueCreate(10, sizeof(int));
     q_difficulty_game = xQueueCreate(5, sizeof(Difficulty));
     q_difficulty_rgb = xQueueCreate(5, sizeof(Difficulty));
@@ -141,14 +124,12 @@ int main()
 
     srand(12345);
 
-    // Create Tasks
     xTaskCreate(keypadTask, "keypad task", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     xTaskCreate(gameTask,   "game task",   configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     xTaskCreate(buttonTask, "button task", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     xTaskCreate(rgbTask,    "rgb task",    configMINIMAL_STACK_SIZE, NULL, 2, NULL);
     xTaskCreate(ssdTask,    "ssd task",    configMINIMAL_STACK_SIZE, NULL, 2, NULL); 
 
-    // Start Scheduler
     vTaskStartScheduler();
 
     while(1);
@@ -161,36 +142,29 @@ void InitializeKeypad()
    KYPD_loadKeyTable(&KYPDInst, (u8*) DEFAULT_KEYTABLE);
 }
 
-// -------------------------------------------------------------------------
 // SSD TASK: Handles multiplexing the 7-segment display for 'lives'
-// -------------------------------------------------------------------------
 static void ssdTask( void *pvParameters )
 {
     const TickType_t xDelay = pdMS_TO_TICKS(10); 
     u32 ssd_value = 0;
-    
-    // Local state
     int local_lives = 3; 
 
     while(1) {
-        // Check if gameTask sent a life update
         xQueueReceive(q_lives, &local_lives, 0);
 
-        // --- Write Left Digit (Blank) ---
+        // Write Left Digit (Blank)
         ssd_value = SSD_decode(0, 1); 
         XGpio_DiscreteWrite(&ssdInst, 1, ssd_value);
         vTaskDelay(xDelay);
 
-        // --- Write Right Digit (Lives) ---
+        // Write Right Digit (Lives)
         ssd_value = SSD_decode(local_lives + ASCII_OFFSET, 0); 
         XGpio_DiscreteWrite(&ssdInst, 1, ssd_value);
         vTaskDelay(xDelay);
     }
 }
 
-// -------------------------------------------------------------------------
 // SSD DECODE: Translates ASCII to 7-segment binary 
-// -------------------------------------------------------------------------
 u32 SSD_decode(u8 key_value, u8 cathode)
 {
     u32 result;
@@ -222,9 +196,7 @@ u32 SSD_decode(u8 key_value, u8 cathode)
     }
 }
 
-// -------------------------------------------------------------------------
 // KEYPAD TASK: Paddle Movement & Difficulty Selection
-// -------------------------------------------------------------------------
 static void keypadTask( void *pvParameters )
 {
    u16 keystate;
@@ -241,28 +213,21 @@ static void keypadTask( void *pvParameters )
 
       if (status == KYPD_SINGLE_KEY) {
           
-          // Paddle controls (Send message to q_paddle)
           if (new_key == '2') {
               paddle_move = -2;
               xQueueSend(q_paddle, &paddle_move, 0);
-          } 
-          else if (new_key == '8') {
+          } else if (new_key == '8') {
               paddle_move = 2;
               xQueueSend(q_paddle, &paddle_move, 0);
-          }
-          
-          // Difficulty controls (Send message to both tasks)
-          else if (new_key == '4') {
+          } else if (new_key == '4') {
               diff = EASY;
               xQueueSend(q_difficulty_game, &diff, 0);
               xQueueSend(q_difficulty_rgb, &diff, 0);
-          }
-          else if (new_key == '5') {
+          } else if (new_key == '5') {
               diff = MEDIUM;
               xQueueSend(q_difficulty_game, &diff, 0);
               xQueueSend(q_difficulty_rgb, &diff, 0);
-          }
-          else if (new_key == '6') {
+          } else if (new_key == '6') {
               diff = HARD;
               xQueueSend(q_difficulty_game, &diff, 0);
               xQueueSend(q_difficulty_rgb, &diff, 0);
@@ -273,9 +238,7 @@ static void keypadTask( void *pvParameters )
    }
 }
 
-// -------------------------------------------------------------------------
 // GAME TASK: Physics, collisions, and drawing
-// -------------------------------------------------------------------------
 static void gameTask( void *pvParameters )
 {
     char temp[20];
@@ -284,7 +247,7 @@ static void gameTask( void *pvParameters )
 
     const TickType_t frameDelay = 50 / portTICK_RATE_MS;
 
-    // --- LOCAL GAME STATE VARIABLES ---
+    // local game state variables
     int paddle_y = 12;            
     int ball_x = 100, ball_y = 16; 
     int ball_dx = -5, ball_dy = 5; 
@@ -302,9 +265,9 @@ static void gameTask( void *pvParameters )
 
     while(1) {
         
-        // 1. Check for incoming Reset Command
+        // check for incoming Reset Command
         if (xQueueReceive(q_reset, &reset_cmd, 0) == pdTRUE) {
-            if (lives == 0 && reset_cmd == 1) { // Only allow reset if dead
+            if (lives == 0 && reset_cmd == 1) { // only allow reset if dead
                 lives = 3;
                 score = 0;
                 paddle_y = 12;
@@ -313,11 +276,11 @@ static void gameTask( void *pvParameters )
                 ball_dx = -base_speed_x;
                 ball_dy = base_speed_y;
                 
-                xQueueSend(q_lives, &lives, 0); // Update SSD
+                xQueueSend(q_lives, &lives, 0); // update ssd
             }
         }
 
-        // 2. Check for Difficulty Update
+        // check for Difficulty Update
         if (xQueueReceive(q_difficulty_game, &new_diff, 0) == pdTRUE) {
             if (new_diff == EASY) { 
                 base_speed_x = 3; 
@@ -333,7 +296,7 @@ static void gameTask( void *pvParameters )
             }
         }
 
-        // 3. Process all incoming Paddle Movements
+        // process all incoming Paddle Movements
         while (xQueueReceive(q_paddle, &paddle_move, 0) == pdTRUE) {
             paddle_y += paddle_move;
             // Clamp paddle bounds
@@ -343,7 +306,7 @@ static void gameTask( void *pvParameters )
                 paddle_y = OledRowMax - paddle_height;
         }
 
-        // --- Physics Engine ---
+        // Physics
         if (lives > 0) {
             
             ball_dx = (ball_dx > 0) ? base_speed_x : -base_speed_x;
@@ -413,16 +376,13 @@ static void gameTask( void *pvParameters )
     }
 }
 
-// -------------------------------------------------------------------------
 // RGB LED TASK: Updates visual feedback based on difficulty setting
-// -------------------------------------------------------------------------
 static void rgbTask( void *pvParameters )
 {
-    u32 led_value = LED_GREEN; // Default matches EASY start
+    u32 led_value = LED_GREEN;
     Difficulty local_difficulty;
 
     while (1) {
-        // Check for difficulty updates from Keypad Task
         if (xQueueReceive(q_difficulty_rgb, &local_difficulty, 0) == pdTRUE) {
             if (local_difficulty == EASY) {
                 led_value = LED_GREEN;
@@ -438,9 +398,7 @@ static void rgbTask( void *pvParameters )
     }
 }
 
-// -------------------------------------------------------------------------
 // BUTTON TASK: Handles resetting the game when lives run out
-// -------------------------------------------------------------------------
 static void buttonTask( void *pvParameters )
 {
     u8 buttonVal = 0;
