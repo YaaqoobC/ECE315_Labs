@@ -38,6 +38,7 @@
 #include "xuartps.h"        //UART definitions header file
 #include "xgpio.h"          //GPIO functions definitions
 #include "xparameters.h"    //DEVICE ID, UART BASEADDRESS, GPIO BASE ADDRESS definitions
+#include <projdefs.h>
 
 
 static void _Task_Uart( void *pvParameters );
@@ -72,6 +73,8 @@ XGpio LEDInst;
 
 // The number of positions/delays which can be sequenced
 #define SEQUENCE_LENGTH 10
+#define RGB_GREEN 0x02
+#define RGB_RED 0x04
 
 //struct for motor parameters
 typedef struct {
@@ -443,25 +446,15 @@ static void _Task_Motor( void *pvParameters ){
 
         // Loop through each destination-delay pair
         for (int i = 0; i < sequenceIndex; i++) {
-            // Turn on green RGB LED to indicate motor is moving
-            XGpio_DiscreteWrite(&Red_RGBInst, 2, 0x02);
-
-            // Move motor to the absolute destination position
+            XGpio_DiscreteWrite(&Red_RGBInst, 2, RGB_GREEN);
             Stepper_moveToPositionInSteps(positionSequence[i][0]);
-
-            // Turn off RGB LED when target position is reached
             XGpio_DiscreteWrite(&Red_RGBInst, 2, 0x00);
-
-            // Disable the motor at the target position
             Stepper_disableMotor();
-
-            // Dwell at this position for the specified delay (in ms)
             if (positionSequence[i][1] > 0) {
                 vTaskDelay(pdMS_TO_TICKS(positionSequence[i][1]));
             }
         }
 
-        // Update current position to where the motor ended up
         motor_parameters.currentposition_in_steps = Stepper_getCurrentPositionInSteps();
 
         /**********************************************************************************************/
@@ -486,6 +479,7 @@ static void _Task_Emerg_Stop( void *pvParameters ){
         /**********************************************************************************************/
         //Read the Button value inside the variable "btnState"
         //i.e., poll the button
+        btnState = XGpio_DiscreteRead(&BTNInst, 1);
 
 
         /**********************************************************************************************/
@@ -503,6 +497,15 @@ static void _Task_Emerg_Stop( void *pvParameters ){
             //Cancel the rest of the destination position-delay pairs.
             //Inside an infinite loop, flash the Red light on RGB led at 2Hz.
             //The Object Instance for RGB led is "Red_RGBInst".
+            Stepper_SetupStop();
+            memset(&positionSequence, 0, sizeof(positionSequence));
+            while(1) {
+                Stepper_disableMotor();
+                XGpio_DiscreteWrite(&Red_RGBInst, 2, RGB_RED);
+                vTaskDelay(pdMS_TO_TICKS(250));
+                XGpio_DiscreteWrite(&Red_RGBInst, 2, 0x00);
+                vTaskDelay(pdMS_TO_TICKS(250));
+            }
 
 
 
